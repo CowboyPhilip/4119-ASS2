@@ -204,7 +204,6 @@ class Server:
                     else:
                         # 旧包重传，重发ack
                         self.send_ack(seq)
-                # print(f"[Server] recv packet {seq}")
             except socket.timeout:
                 continue
             # except Exception as e:
