@@ -106,58 +106,65 @@ class Server:
         return:
         the connection to the client 
         """
-        # conn = None
-        # return conn
         print("[Server] Waiting for connection...")
-        # print("Waiting for client...")
+
+        syn_received = False
+        syn_seq = None
+        syn_ack_sent_time = 0
+
         while not self.conn_established.is_set():
             try:
                 raw, addr = self.sock.recvfrom(65536)
-                print("[Server] recv", raw)
                 pkt = self.parse_packet(raw)
-                if pkt==None or isinstance(pkt, str):
+                if pkt is None or isinstance(pkt, str):
                     continue
-                seq = pkt["seq"]
-                if pkt["type"] == "syn":
-                    print("[Server] recv syn")
-                    self.client_addr = addr
-                    self.log(self.client_addr[1], self.src_port, pkt["seq"], pkt["ack"], pkt["type"].upper(), len(pkt["payload"]))
-                    self.send_ack(seq + 1,"syn-ack")
-                    print(f"[Server] send syn-ack ")
 
-                    # while True:
-                    start = time.time()
-                    while time.time()-start < 2:   # 开始等待client的ACK 2s后重启 应对syn-ack和ack的丢失
-                        print("[Server] waiting for ACK")
-                        try:
-                            raw, addr = self.sock.recvfrom(65536)
-                            print("[Server] recv ack from client maybe")
-                            ack_pkt = self.parse_packet(raw)
-                            if ack_pkt == None:
-                                continue
-                            if (ack_pkt["type"] == "ack" and ack_pkt["ack"] == seq+2) or (ack_pkt["type"]=="data"):
-                                self.conn_established.set()
-                                self.recv_thread = threading.Thread(target=self.receive_loop)
-                                self.recv_thread.start()
-                                print("[Server] Connection established with", addr)
-                                self.log(self.client_addr[1],self.src_port, ack_pkt["seq"], ack_pkt["ack"], ack_pkt["type"].upper(), len(ack_pkt["payload"]))
-                                return addr
-                        except socket.timeout:
-                            break
-                    
-                    # self.conn_established.set()
-                    # self.recv_thread = threading.Thread(target=self.receive_loop)
-                    # self.recv_thread.start()
-                    # return addr
+                pkt_type = pkt["type"]
+                seq = pkt["seq"]
+                ack = pkt["ack"]
+
+                if pkt_type == "syn":
+                    print("[Server] recv SYN")
+                    self.client_addr = addr
+                    syn_seq = seq
+
+                    self.log(addr[1], self.src_port, seq, ack, "SYN", len(pkt["payload"]))
+                    self.send_ack(seq + 1, "syn-ack")  # 已有log在内部
+                    # self.log(self.src_port, self.addr[1], seq+1, ack, "SYN-ACK", len(pkt["payload"]))
+                    syn_ack_sent_time = time.time()
+                    syn_received = True
+                    print("[Server] send SYN-ACK")
+
+                elif pkt_type == "ack" and syn_received:
+                    if ack == syn_seq + 2:
+                        print("[Server] recv valid ACK")
+                        self.log(addr[1], self.src_port, pkt["seq"], pkt["ack"], "ACK", len(pkt["payload"]))
+                        self.conn_established.set()
+                        self.recv_thread = threading.Thread(target=self.receive_loop)
+                        self.recv_thread.start()
+                        print("[Server] Connection established with", addr)
+                        return addr
+
+                elif pkt_type == "data" and syn_received:
+                    # 有些client直接跳过ACK发送DATA  / ack lost
+                    print("[Server] recv DATA before ACK → accepting connection")
+                    self.conn_established.set()
+                    self.recv_thread = threading.Thread(target=self.receive_loop)
+                    self.recv_thread.start()
+                    self.log(addr[1], self.src_port, pkt["seq"], pkt["ack"], pkt["type"].upper(), len(pkt["payload"]))
+                    return addr
+
+                # 超时重发 SYN-ACK
+                if syn_received and (time.time() - syn_ack_sent_time > 1.5):
+                    print("[Server] SYN-ACK timeout, resending...")
+                    self.send_ack(syn_seq + 1, "syn-ack")
+                    syn_ack_sent_time = time.time()
+
             except socket.timeout:
-                print("[Server] accept time out")
                 continue
-            # except Exception
             except Exception as e:
-                print(e)
+                print("[Server] Exception:", e)
                 continue
-            # time.sleep(0.1)
-        return None
 
     def receive_loop(self):
         """

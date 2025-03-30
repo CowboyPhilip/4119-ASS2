@@ -215,12 +215,12 @@ class Client:
         start = time.time()
         while self.base < len(payloads) and self.running:
             # 如果一个对data的ack没收到 说明ack丢失了 重新connect
-            if self.third_handshaked==False and time.time() - start > 2:
-                self.connect()
-                self.base = 0
-                self.next_seq = 0
-                self.unacked_packets.clear()
-                return
+            # if self.third_handshaked==False and time.time() - start > 2:
+            #     self.connect()
+            #     self.base = 0
+            #     self.next_seq = 0
+            #     self.unacked_packets.clear()
+            #     return
 
             with self.send_lock:
                 while self.next_seq < self.base + self.window_size and self.next_seq < len(payloads):
