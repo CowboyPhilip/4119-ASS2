@@ -47,7 +47,7 @@ class Client:
 
         self.third_handshaked = False
 
-        self.log_file = open(f"log_{self.src_port}_client.txt", "w")
+        self.log_file = open(f"log_{self.src_port}.txt", "w")
 
 
     def checksum(self, data):
@@ -165,6 +165,7 @@ class Client:
                 if pkt["type"] == "ack":
                     ack_num = pkt["ack"]
                     print(f"[Client] acking seq number {ack_num}")
+                    print("[Client] recv pkt", pkt)
                     self.log(self.dst_port, self.src_port, pkt["seq"], pkt["ack"], pkt["type"].upper(), len(pkt["payload"]))
                     with self.send_lock:
                         keys = list(self.unacked_packets.keys())

@@ -39,7 +39,7 @@ class Server:
         self.recv_thread = None
         self.conn_established = threading.Event()
 
-        self.log_file = open(f"log_{self.src_port}_server.txt", "w")
+        self.log_file = open(f"log_{self.src_port}.txt", "w")
         
     def checksum(self, data):
         return hashlib.md5(data.encode() if isinstance(data, str) else data).hexdigest()
