@@ -30,7 +30,8 @@ if __name__ == '__main__':
         data = f.read()
     sent = client.send(data)
     print(f">> sent {sent} bytes of data")
-    
+    sent = client.send(data)
+    print(f">> sent {sent} bytes of data")
     # close the connection
     client.close()
 

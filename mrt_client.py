@@ -13,6 +13,7 @@ import json
 import hashlib
 from datetime import datetime
 import base64
+import queue
 
 class Client:
     def init(self, src_port, dst_addr, dst_port, segment_size):
@@ -45,9 +46,14 @@ class Client:
         self.unacked_packets = {}
         self.running = True
 
+        self.send_thread = None
+        self.ack_thread = None
+
         self.third_handshaked = False
 
         self.log_file = open(f"log_{self.src_port}.txt", "w")
+        # self.expected_packets = 0
+        self.send_queue = queue.Queue()
 
 
     def checksum(self, data):
@@ -71,20 +77,20 @@ class Client:
     #     print("[Client] Timeout! Resending window...")
     #     self.ack_event.set()  # Unblock waiting thread to retransmit
 
-    def recv_packet(self):
-        try:
-            data = self.sock.recv(4096)
-            packet = json.loads(data.decode())
-            payload = packet.get("payload", "")
-            if packet.get("checksum") != self.checksum(payload):
-                print(f"[Client] Checksum mismatch for packet {packet.get('seq')}, discarded")
-                return None
-            return packet
-        except socket.timeout:
-            return None
-        except Exception as e:
-            print(f"[Client] Failed to parse packet: {e}")
-            return None
+    # def recv_packet(self):
+    #     try:
+    #         data = self.sock.recv(4096)
+    #         packet = json.loads(data.decode())
+    #         payload = packet.get("payload", "")
+    #         if packet.get("checksum") != self.checksum(payload):
+    #             print(f"[Client] Checksum mismatch for packet {packet.get('seq')}, discarded")
+    #             return None
+    #         return packet
+    #     except socket.timeout:
+    #         return None
+    #     except Exception as e:
+    #         print(f"[Client] Failed to parse packet: {e}")
+    #         return None
         
     def connect(self):
         """
@@ -114,6 +120,8 @@ class Client:
                     print("[Client] Sent ACK, connection established")
                     self.ack_thread = threading.Thread(target=self.ack_listener)
                     self.ack_thread.start()
+                    self.send_thread = threading.Thread(target=self.send_loop)
+                    self.send_thread.start()
 
 
                     return
@@ -151,6 +159,7 @@ class Client:
         except Exception as e:
             print(f"[Client] General parse/validation error: {e}")
             return None
+
     def ack_listener(self):
         """
         后台监听 ack 以及fin，滑动窗口
@@ -176,7 +185,7 @@ class Client:
                         self.ack_event.set()
                     self.third_handshaked = True
                 elif pkt["type"] == "fin":
-                    print("[Client] server closing connection")
+                    print("[Client] server want to close connection")
                     self.log(self.dst_port, self.src_port, pkt["seq"], pkt["ack"], pkt["type"].upper(), len(pkt["payload"]))
                     pkt = {
                         "type":"fin-ack",
@@ -188,72 +197,134 @@ class Client:
                         self.sock.sendto(json.dumps(pkt).encode(), (self.dst_addr, self.dst_port))
                         self.log(self.src_port, self.dst_port, pkt["seq"], pkt["ack"], pkt["type"].upper(), len(pkt["payload"]))
                     self.running = False
-                    print("[Client] closed")
+                    # print("[Client] closed")
             except socket.timeout:
                 continue
 
-    def send(self, data):
-        """
-        send a chunk of data of arbitrary size to the server
-        blocking until all data is sent
+    # def send(self, data):
+    #     """
+    #     send a chunk of data of arbitrary size to the server
+    #     blocking until all data is sent
 
-        it should support protection against segment loss/corruption/reordering and flow control
+    #     it should support protection against segment loss/corruption/reordering and flow control
 
-        arguments:
-        data -- the bytes to be sent to the server
-        """
-        print("[Client] start sending data")
-        if isinstance(data, bytes):
-            pass
-        else:
-            raise "data format error, should be bytes"
-        # data_str = data.decode() if isinstance(data, bytes) else data
-        # segments = [data_str[i:i+self.segment_size] for i in range(0, len(data_str), self.segment_size)]
+    #     arguments:
+    #     data -- the bytes to be sent to the server
+    #     """
+    #     print("[Client] start sending data")
+    #     if isinstance(data, bytes):
+    #         pass
+    #     else:
+    #         raise "data format error, should be bytes"
+    #     # data_str = data.decode() if isinstance(data, bytes) else data
+    #     # segments = [data_str[i:i+self.segment_size] for i in range(0, len(data_str), self.segment_size)]
 
-        # list of payload segments, each
-        payloads = [data[i:i+self.payload_size] for i in range(0, len(data), self.payload_size)]
-        start = time.time()
-        while self.base < len(payloads) and self.running:
-            # 如果一个对data的ack没收到 说明ack丢失了 重新connect
-            # if self.third_handshaked==False and time.time() - start > 2:
-            #     self.connect()
-            #     self.base = 0
-            #     self.next_seq = 0
-            #     self.unacked_packets.clear()
-            #     return
+    #     # list of payload segments, each
+    #     payloads = [data[i:i+self.payload_size] for i in range(0, len(data), self.payload_size)]
+    #     start = time.time()
+    #     self.expected_packets += len(payloads)
+    #     while self.base < self.expected_packets and self.running:
+    #         # 如果一个对data的ack没收到 说明ack丢失了 重新connect
+    #         # if self.third_handshaked==False and time.time() - start > 2:
+    #         #     self.connect()
+    #         #     self.base = 0
+    #         #     self.next_seq = 0
+    #         #     self.unacked_packets.clear()
+    #         #     return
 
+    #         with self.send_lock:
+    #             while self.next_seq < self.base + self.window_size and self.next_seq < self.expected_packets:
+    #                 pkt = self.make_packet("data", self.next_seq, 0, payloads[self.next_seq])
+    #                 self.unacked_packets[self.next_seq] = {"packet": pkt, "time": time.time()}
+    #                 print("[Client] sending data", pkt)
+    #                 self.sock.sendto(json.dumps(pkt).encode(), (self.dst_addr, self.dst_port))
+    #                 self.log(self.src_port, self.dst_port, pkt["seq"], pkt["ack"], pkt["type"].upper(), len(payloads[self.next_seq]))
+    #                 self.next_seq += 1
+
+    #         # 检查超时重传
+    #         time.sleep(0.1)
+    #         now = time.time()
+    #         with self.send_lock:
+    #             for seq, info in self.unacked_packets.items():
+    #                 if now - info["time"] > self.timeout:
+    #                     print(f"[Client] Timeout, retransmitting seq={seq}")
+    #                     self.sock.sendto(json.dumps(info["packet"]).encode(), (self.dst_addr, self.dst_port))
+    #                     self.unacked_packets[seq]["time"] = now
+    #     # while self.running:
+    #     #     time.sleep(0.5)
+    #     print("[Client] All data sent and acknowledged")
+    #     return len(data)
+
+    def send_loop(self):
+        while self.running:
             with self.send_lock:
-                while self.next_seq < self.base + self.window_size and self.next_seq < len(payloads):
-                    pkt = self.make_packet("data", self.next_seq, 0, payloads[self.next_seq])
+                # 填充窗口：只要窗口有空位 && 还有要发的数据
+                while self.next_seq < self.base + self.window_size and not self.send_queue.empty():
+                    payload = self.send_queue.get()
+                    pkt = self.make_packet("data", self.next_seq, 0, payload)
                     self.unacked_packets[self.next_seq] = {"packet": pkt, "time": time.time()}
-                    print("[Client] sending data", pkt)
                     self.sock.sendto(json.dumps(pkt).encode(), (self.dst_addr, self.dst_port))
-                    self.log(self.src_port, self.dst_port, pkt["seq"], pkt["ack"], pkt["type"].upper(), len(payloads[self.next_seq]))
+                    self.log(self.src_port, self.dst_port, pkt["seq"], pkt["ack"], pkt["type"].upper(), len(payload))
+                    print(f"[Client] Sent seq={self.next_seq}")
                     self.next_seq += 1
 
-            # 检查超时重传
-            time.sleep(0.1)
-            now = time.time()
-            with self.send_lock:
+                # 重传超时包
+                now = time.time()
                 for seq, info in self.unacked_packets.items():
                     if now - info["time"] > self.timeout:
                         print(f"[Client] Timeout, retransmitting seq={seq}")
                         self.sock.sendto(json.dumps(info["packet"]).encode(), (self.dst_addr, self.dst_port))
                         self.unacked_packets[seq]["time"] = now
-        # self.running = False
-        while self.running:
-            time.sleep(0.5)
-        print("[Client] All data sent and acknowledged")
+            time.sleep(0.05)
 
+    def send(self, data):
+        if not isinstance(data, bytes):
+            raise ValueError("data must be bytes")
+
+        payloads = [data[i:i+self.payload_size] for i in range(0, len(data), self.payload_size)]
+        total_segs = len(payloads)
+
+        with self.send_lock:
+            start_seq = self.next_seq + self.send_queue.qsize()  # 预计发送的起始 seq
+            for payload in payloads:
+                self.send_queue.put(payload)
+
+        # 阻塞等待所有这些数据都被 ack 掉
+        while True:
+            with self.send_lock:
+                acked_upto = self.base
+            if acked_upto >= start_seq + total_segs:
+                break
+            time.sleep(0.1)
+
+        return len(data)
+    
     def close(self):
         """
         request to close the connection with the server
         blocking until the connection is closed
         """
-        self.running = False
+        while self.running:
+            time.sleep(0.1)
+        # self.running = False
+        print("[Client] closing connection...")
         self.ack_thread.join()
-        self.sock.close()
-        self.log_file.close()
+        while True:
+            try:
+                raw, addr = self.sock.recvfrom(65536)
+                end = self.parse_ack(raw)
+                if end == None:
+                    continue
+                if end["type"]=="ack":
+                    print("[Client] recv ACK, close")
+                    self.sock.close()
+                    self.log_file.close()
+                    return 
+            except socket.timeout:
+                continue
+            except Exception as e:
+                print(f"[Client] close fail, error: {e}")
+
 
     def log(self, src_port, dst_port, seq, ack, pkt_type, payload_length):
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]

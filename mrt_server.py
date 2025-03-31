@@ -227,7 +227,7 @@ class Server:
         """
         # data = b""
         # return data
-        while True:
+        while not self.closed:
             with self.lock:
                 if len(self.recv_data) >= length:
                     result = self.recv_data[:length]
@@ -262,8 +262,14 @@ class Server:
                 fin_ack = json.loads(fin_ack.decode())
                 if fin_ack["type"]=="fin-ack":
                     self.log(self.client_addr[1], self.src_port, fin_ack["seq"], fin_ack["ack"], fin_ack["type"].upper(), len(fin_ack["payload"]))
+
+                    for _ in range(5):
+                        # self.sock.sendto(json.dumps(pkt).encode(), self.client_addr)
+                        self.send_ack(0)
+                    # self.log(self.src_port, self.client_addr[1], 0 , 0, "ACK".upper(), len(fin_ack["payload"]))
                     self.sock.close()
                     self.log_file.close()
+                    # self.closed = True
                     print("[Server] Closed")
                     return
             except socket.timeout:

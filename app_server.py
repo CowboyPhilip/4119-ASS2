@@ -28,7 +28,7 @@ if __name__ == '__main__':
 
     # receive 8000 bytes data from client
     received = server.receive(client, 8000)
-
+    received2 = server.receive(client, 8000)
     # read the first 8000 bytes of the original file
     with open("data.txt", "rb") as f:
         input = f.read(8000)
